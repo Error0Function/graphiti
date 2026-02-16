@@ -1,10 +1,15 @@
 """Factory classes for creating LLM, Embedder, and Database clients."""
 
+from graphiti_core.cross_encoder.client import CrossEncoderClient
+
 from config.schema import (
     DatabaseConfig,
     EmbedderConfig,
     LLMConfig,
+    RerankerConfig,
 )
+from services.custom_llm_clients import DeepSeekClient, SiliconFlowClient
+from services.reranker import HttpRerankerClient
 
 # Try to import FalkorDriver if available
 try:
@@ -16,8 +21,12 @@ except ImportError:
 
 # Kuzu support removed - FalkorDB is now the default
 from graphiti_core.embedder import EmbedderClient, OpenAIEmbedder
-from graphiti_core.llm_client import LLMClient, OpenAIClient
+from graphiti_core.llm_client import (
+    LLMClient,
+    OpenAIClient,
+)
 from graphiti_core.llm_client.config import LLMConfig as GraphitiLLMConfig
+from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
 
 # Try to import additional providers if available
 try:
@@ -107,6 +116,55 @@ class LLMClientFactory:
         provider = config.provider.lower()
 
         match provider:
+            case 'openai_compatible':
+                if not config.providers.openai_compatible:
+                    raise ValueError('OpenAI-compatible provider configuration not found')
+
+                api_key = config.providers.openai_compatible.api_key
+                _validate_api_key('OpenAI-compatible', api_key, logger)
+
+                llm_config = GraphitiLLMConfig(
+                    api_key=api_key,
+                    base_url=config.providers.openai_compatible.api_url,
+                    model=config.model,
+                    small_model=config.model,
+                    temperature=config.temperature,
+                    max_tokens=config.max_tokens,
+                )
+                return OpenAIGenericClient(config=llm_config)
+
+            case 'deepseek':
+                if not config.providers.deepseek:
+                    raise ValueError('DeepSeek provider configuration not found')
+
+                api_key = config.providers.deepseek.api_key
+                _validate_api_key('DeepSeek', api_key, logger)
+
+                llm_config = GraphitiLLMConfig(
+                    api_key=api_key,
+                    base_url=config.providers.deepseek.api_url,
+                    model=config.model,
+                    temperature=config.temperature,
+                    max_tokens=config.max_tokens,
+                )
+                return DeepSeekClient(config=llm_config, max_tokens=config.max_tokens)
+
+            case 'siliconflow':
+                if not config.providers.siliconflow:
+                    raise ValueError('SiliconFlow provider configuration not found')
+
+                api_key = config.providers.siliconflow.api_key
+                _validate_api_key('SiliconFlow', api_key, logger)
+
+                llm_config = GraphitiLLMConfig(
+                    api_key=api_key,
+                    base_url=config.providers.siliconflow.api_url,
+                    model=config.model,
+                    temperature=config.temperature,
+                    max_tokens=config.max_tokens,
+                )
+                return SiliconFlowClient(config=llm_config, max_tokens=config.max_tokens)
+
             case 'openai':
                 if not config.providers.openai:
                     raise ValueError('OpenAI provider configuration not found')
@@ -276,6 +334,24 @@ class EmbedderFactory:
                 )
                 return OpenAIEmbedder(config=embedder_config)
 
+            case 'siliconflow':
+                if not config.providers.siliconflow:
+                    raise ValueError('SiliconFlow provider configuration not found')
+
+                api_key = config.providers.siliconflow.api_key
+                _validate_api_key('SiliconFlow Embedder', api_key, logger)
+
+                from graphiti_core.embedder.openai import OpenAIEmbedderConfig
+
+                embedder_config = OpenAIEmbedderConfig(
+                    api_key=api_key,
+                    embedding_model=config.model,
+                    base_url=config.providers.siliconflow.api_url,
+                    embedding_dim=config.dimensions,
+                    request_dimensions=config.dimensions,
+                )
+                return OpenAIEmbedder(config=embedder_config)
+
             case 'azure_openai':
                 if not HAS_AZURE_EMBEDDER:
                     raise ValueError(
@@ -433,3 +509,51 @@ class DatabaseDriverFactory:
 
             case _:
                 raise ValueError(f'Unsupported Database provider: {provider}')
+
+
+class RerankerFactory:
+    """Factory for creating Reranker clients based on configuration."""
+
+    @staticmethod
+    def create(config: RerankerConfig) -> CrossEncoderClient | HttpRerankerClient | None:
+        """Create a Reranker client based on the configured provider."""
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        provider = config.provider.lower()
+
+        if provider == 'none':
+            return None
+
+        match provider:
+            case 'siliconflow':
+                if not config.providers.siliconflow:
+                    raise ValueError('SiliconFlow provider configuration not found')
+
+                api_key = config.providers.siliconflow.api_key
+                _validate_api_key('SiliconFlow Reranker', api_key, logger)
+
+                return HttpRerankerClient(
+                    base_url=config.providers.siliconflow.api_url,
+                    api_key=api_key,
+                    model=config.model or 'BAAI/bge-reranker-v2-m3',
+                    dimensions=config.dimensions,
+                )
+
+            case 'openai_compatible':
+                if not config.providers.openai_compatible:
+                    raise ValueError('OpenAI-compatible provider configuration not found')
+
+                api_key = config.providers.openai_compatible.api_key
+                _validate_api_key('OpenAI-compatible Reranker', api_key, logger)
+
+                return HttpRerankerClient(
+                    base_url=config.providers.openai_compatible.api_url,
+                    api_key=api_key,
+                    model=config.model,
+                    dimensions=config.dimensions,
+                )
+
+            case _:
+                raise ValueError(f'Unsupported Reranker provider: {provider}')

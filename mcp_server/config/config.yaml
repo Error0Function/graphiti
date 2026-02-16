@@ -70,6 +70,15 @@ embedder:
       api_url: ${VOYAGE_API_URL:https://api.voyageai.com/v1}
       model: "voyage-3"
 
+reranker:
+  provider: "siliconflow"
+  model: "BAAI/bge-reranker-v2-m3"
+  dimensions: ${RERANKER__DIMENSIONS:}
+  providers:
+    siliconflow:
+      api_key: ${RERANKER__API_KEY}
+      api_url: ${RERANKER__BASE_URL}
+
 database:
   provider: "falkordb"  # Default: falkordb. Options: neo4j, falkordb
 
@@ -91,21 +100,19 @@ graphiti:
   episode_id_prefix: ${EPISODE_ID_PREFIX:}
   user_id: ${USER_ID:mcp_user}
   entity_types:
+    - name: "WorkItem"
+      description: "Time-bound work units with explicit status or priority. Use for what is being done now/next, not for rationale or results."
+    - name: "Change"
+      description: "Concrete modifications to code, config, infra, or behavior, including affected scope. Use for what changed or will change, not for validation."
+    - name: "Decision"
+      description: "Notable choices with rationale, trade-offs, and alternatives considered. Use when the statement answers why a path was chosen."
+    - name: "Issue"
+      description: "Problems, blockers, regressions, risks, or unexpected failures with impact. Use when progress is impeded or quality is at risk."
+    - name: "Verification"
+      description: "Acceptance criteria and validation evidence, including test results and repro steps. Use to confirm completion and prevent status drift."
+    - name: "Context"
+      description: "Short-lived background, constraints, or assumptions that frame current work and decisions."
+    - name: "Rule"
+      description: "Enforced constraints for the current project phase. Use for mandatory conventions in effect now."
     - name: "Preference"
-      description: "User preferences, choices, opinions, or selections (PRIORITIZE over most other types except User/Assistant)"
-    - name: "Requirement"
-      description: "Specific needs, features, or functionality that must be fulfilled"
-    - name: "Procedure"
-      description: "Standard operating procedures and sequential instructions"
-    - name: "Location"
-      description: "Physical or virtual places where activities occur"
-    - name: "Event"
-      description: "Time-bound activities, occurrences, or experiences"
-    - name: "Organization"
-      description: "Companies, institutions, groups, or formal entities"
-    - name: "Document"
-      description: "Information content in various forms (books, articles, reports, etc.)"
-    - name: "Topic"
-      description: "Subject of conversation, interest, or knowledge domain (use as last resort)"
-    - name: "Object"
-      description: "Physical items, tools, devices, or possessions (use as last resort)"
+      description: "Non-mandatory defaults for the current phase. Use for soft choices and team defaults."

@@ -1,0 +1,73 @@
+# syntax=docker/dockerfile:1
+# Local Development Graphiti MCP Server Image
+# This image builds from local source code instead of PyPI
+
+FROM python:3.11-slim-bookworm
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv for Python package management
+ADD https://astral.sh/uv/install.sh /uv-installer.sh
+RUN sh /uv-installer.sh && rm /uv-installer.sh
+
+# Add uv to PATH
+ENV PATH="/root/.local/bin:${PATH}"
+
+# Configure uv for optimal Docker usage
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never \
+    MCP_SERVER_HOST="0.0.0.0" \
+    PYTHONUNBUFFERED=1
+
+# Set up working directory
+WORKDIR /app
+
+# Copy graphiti-core source and config to a dedicated package directory
+WORKDIR /app/graphiti-core-pkg
+COPY pyproject.toml .
+COPY README.md .
+COPY graphiti_core ./graphiti_core
+
+# Set up MCP server directory
+WORKDIR /app/mcp
+
+# Copy MCP server project files
+COPY mcp_server/pyproject.toml mcp_server/uv.lock ./
+
+# Configure local dependency path for graphiti-core
+# This appends the tool.uv.sources section to use the local path
+RUN printf "\n[tool.uv.sources]\ngraphiti-core = { path = \"../graphiti-core-pkg\" }\n" >> pyproject.toml
+
+# Remove version constraint for graphiti-core to allow local version
+RUN sed -i 's/graphiti-core\[falkordb\]==[0-9.]\+/graphiti-core[falkordb]/' pyproject.toml
+
+# Remove lock file to force resolution with local dependency
+RUN rm uv.lock
+
+# Install dependencies (including local graphiti-core)
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-group dev
+
+# Copy MCP server application code
+COPY mcp_server/main.py ./
+COPY mcp_server/src/ ./src/
+COPY mcp_server/config/ ./config/
+
+# Create log directory
+RUN mkdir -p /var/log/graphiti
+
+# Expose MCP server port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=5s --start-period=15s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run the MCP server
+CMD ["uv", "run", "--no-sync", "main.py"]

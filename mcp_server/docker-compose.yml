@@ -1,0 +1,54 @@
+name: graphiti
+
+services:
+  falkordb-server:
+    image: falkordb/falkordb-server:latest
+    container_name: falkordb-server
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+    environment:
+      - REDIS_ARGS=/etc/falkordb/falkordb.conf
+    volumes:
+      - E:/Code/FalkorDB/data:/var/lib/falkordb/data
+      - E:/Code/FalkorDB/docker/falkordb.conf:/etc/falkordb/falkordb.conf:ro
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  falkordb-browser:
+    image: falkordb/falkordb-browser:latest
+    container_name: falkordb-browser
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    depends_on:
+      - falkordb-server
+
+  graphiti-mcp:
+    build:
+      context: ../
+      dockerfile: mcp_server/docker/Dockerfile.local
+    image: graphiti-mcp:latest
+    container_name: graphiti-mcp
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      falkordb-server:
+        condition: service_healthy
+    environment:
+      # Use the hostname 'falkordb-server' as defined in this compose file
+      - DATABASE__PROVIDERS__FALKORDB__URI=redis://falkordb-server:6379
+      # Map to the database name requested by user
+      - DATABASE__PROVIDERS__FALKORDB__DATABASE=Graphiti
+      # Ensure config path is set correctly
+      - CONFIG_PATH=/app/mcp/config/config.yaml
+    ports:
+      - "9000:8000"
+    volumes:
+      # Mount config directory so we can inspect/modify if needed
+      - ./config:/app/mcp/config

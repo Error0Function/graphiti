@@ -197,7 +197,8 @@ class LLMClient(ABC):
                 if cached_response is not None:
                     logger.debug(f'Cache hit for {cache_key}')
                     span.add_attributes({'cache.hit': True})
-                    return cached_response
+                    if isinstance(cached_response, dict):
+                        return cached_response
 
             span.add_attributes({'cache.hit': False})
 

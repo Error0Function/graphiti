@@ -125,6 +125,20 @@ class GroqProviderConfig(BaseModel):
     api_url: str = 'https://api.groq.com/openai/v1'
 
 
+class DeepSeekProviderConfig(BaseModel):
+    """DeepSeek provider configuration."""
+
+    api_key: str | None = None
+    api_url: str = 'https://api.deepseek.com'
+
+
+class SiliconFlowProviderConfig(BaseModel):
+    """SiliconFlow provider configuration."""
+
+    api_key: str | None = None
+    api_url: str = 'https://api.siliconflow.cn/v1'
+
+
 class VoyageProviderConfig(BaseModel):
     """Voyage AI provider configuration."""
 
@@ -137,6 +151,9 @@ class LLMProvidersConfig(BaseModel):
     """LLM providers configuration."""
 
     openai: OpenAIProviderConfig | None = None
+    openai_compatible: OpenAIProviderConfig | None = None
+    deepseek: DeepSeekProviderConfig | None = None
+    siliconflow: SiliconFlowProviderConfig | None = None
     azure_openai: AzureOpenAIProviderConfig | None = None
     anthropic: AnthropicProviderConfig | None = None
     gemini: GeminiProviderConfig | None = None
@@ -159,6 +176,8 @@ class EmbedderProvidersConfig(BaseModel):
     """Embedder providers configuration."""
 
     openai: OpenAIProviderConfig | None = None
+    openai_compatible: OpenAIProviderConfig | None = None
+    siliconflow: SiliconFlowProviderConfig | None = None
     azure_openai: AzureOpenAIProviderConfig | None = None
     gemini: GeminiProviderConfig | None = None
     voyage: VoyageProviderConfig | None = None
@@ -171,6 +190,22 @@ class EmbedderConfig(BaseModel):
     model: str = Field(default='text-embedding-3-small', description='Model name')
     dimensions: int = Field(default=1536, description='Embedding dimensions')
     providers: EmbedderProvidersConfig = Field(default_factory=EmbedderProvidersConfig)
+
+
+class RerankerProvidersConfig(BaseModel):
+    """Reranker providers configuration."""
+
+    siliconflow: SiliconFlowProviderConfig | None = None
+    openai_compatible: OpenAIProviderConfig | None = None
+
+
+class RerankerConfig(BaseModel):
+    """Reranker configuration."""
+
+    provider: str = Field(default='none', description='Reranker provider')
+    model: str = Field(default='', description='Model name')
+    dimensions: int | None = Field(default=None, description='Reranker dimensions')
+    providers: RerankerProvidersConfig = Field(default_factory=RerankerProvidersConfig)
 
 
 class Neo4jProviderConfig(BaseModel):
@@ -232,6 +267,7 @@ class GraphitiConfig(BaseSettings):
     server: ServerConfig = Field(default_factory=ServerConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
     embedder: EmbedderConfig = Field(default_factory=EmbedderConfig)
+    reranker: RerankerConfig = Field(default_factory=RerankerConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
     graphiti: GraphitiAppConfig = Field(default_factory=GraphitiAppConfig)
 

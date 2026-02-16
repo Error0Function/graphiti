@@ -28,6 +28,7 @@ class OpenAIEmbedderConfig(EmbedderConfig):
     embedding_model: EmbeddingModel | str = DEFAULT_EMBEDDING_MODEL
     api_key: str | None = None
     base_url: str | None = None
+    request_dimensions: int | None = None
 
 
 class OpenAIEmbedder(EmbedderClient):
@@ -54,13 +55,15 @@ class OpenAIEmbedder(EmbedderClient):
     async def create(
         self, input_data: str | list[str] | Iterable[int] | Iterable[Iterable[int]]
     ) -> list[float]:
-        result = await self.client.embeddings.create(
-            input=input_data, model=self.config.embedding_model
-        )
+        request_args = {'input': input_data, 'model': self.config.embedding_model}
+        if self.config.request_dimensions is not None:
+            request_args['dimensions'] = self.config.request_dimensions
+        result = await self.client.embeddings.create(**request_args)
         return result.data[0].embedding[: self.config.embedding_dim]
 
     async def create_batch(self, input_data_list: list[str]) -> list[list[float]]:
-        result = await self.client.embeddings.create(
-            input=input_data_list, model=self.config.embedding_model
-        )
+        request_args = {'input': input_data_list, 'model': self.config.embedding_model}
+        if self.config.request_dimensions is not None:
+            request_args['dimensions'] = self.config.request_dimensions
+        result = await self.client.embeddings.create(**request_args)
         return [embedding.embedding[: self.config.embedding_dim] for embedding in result.data]
