@@ -172,6 +172,7 @@ class GraphitiService:
         self.semaphore = asyncio.Semaphore(semaphore_limit)
         self.client: Graphiti | None = None
         self.entity_types = None
+        self.reranker_client = None
 
     async def initialize(self) -> None:
         """Initialize the Graphiti client with factory-created components."""
@@ -196,6 +197,7 @@ class GraphitiService:
             reranker_client = None
             try:
                 reranker_client = RerankerFactory.create(self.config.reranker)
+                self.reranker_client = reranker_client
             except Exception as e:
                 logger.warning(f'Failed to create reranker client: {e}')
 
@@ -334,6 +336,11 @@ class GraphitiService:
             raise RuntimeError('Failed to initialize Graphiti client')
         return self.client
 
+    async def close(self) -> None:
+        """Release resources held by service components."""
+        if self.reranker_client is not None and hasattr(self.reranker_client, 'close'):
+            await self.reranker_client.close()
+
 
 @mcp.tool()
 async def add_memory(
@@ -459,17 +466,61 @@ async def search_nodes(
         )
 
         # Use the search_ method with node search config
-        from graphiti_core.search.search_config_recipes import NODE_HYBRID_SEARCH_RRF
+        # Choose cross_encoder reranking when a reranker is configured
+        has_reranker = config.reranker.provider.lower() != 'none'
+        if has_reranker:
+            from graphiti_core.search.search_config_recipes import (
+                NODE_HYBRID_SEARCH_CROSS_ENCODER,
+            )
+            node_search_config = NODE_HYBRID_SEARCH_CROSS_ENCODER
+        else:
+            from graphiti_core.search.search_config_recipes import NODE_HYBRID_SEARCH_RRF
+            node_search_config = NODE_HYBRID_SEARCH_RRF
 
-        results = await client.search_(
-            query=query,
-            config=NODE_HYBRID_SEARCH_RRF,
-            group_ids=effective_group_ids,
-            search_filter=search_filters,
-        )
-
-        # Extract nodes from results
-        nodes = results.nodes[:max_nodes] if results.nodes else []
+        # For FalkorDB each group_id is a separate graph; query each graph independently
+        # and merge results. For other drivers, clone is a no-op and group_id filtering
+        # is handled by the WHERE clause inside the query.
+        if effective_group_ids:
+            # Fetch per-group results concurrently, then allocate slots proportionally.
+            quota = max(1, max_nodes // len(effective_group_ids))
+            per_group_results = await asyncio.gather(
+                *[
+                    client.search_(
+                        query=query,
+                        config=node_search_config,
+                        group_ids=[gid],
+                        search_filter=search_filters,
+                        driver=client.driver.clone(database=gid),
+                    )
+                    for gid in effective_group_ids
+                ]
+            )
+            # Allocate slots proportionally so no single group crowds out others.
+            nodes: list = []
+            leftovers: list = []
+            for r in per_group_results:
+                group_nodes = r.nodes or []
+                nodes.extend(group_nodes[:quota])
+                leftovers.extend(group_nodes[quota:])
+            remaining = max_nodes - len(nodes)
+            if remaining > 0:
+                nodes.extend(leftovers[:remaining])
+            nodes = nodes[:max_nodes]
+        else:
+            result = await client.search_(
+                query=query,
+                config=node_search_config,
+                group_ids=None,
+                search_filter=search_filters,
+            )
+            seen: set[str] = set()
+            nodes: list = []
+            for node in result.nodes or []:
+                if node.uuid not in seen:
+                    seen.add(node.uuid)
+                    nodes.append(node)
+                    if len(nodes) >= max_nodes:
+                        break
 
         if not nodes:
             return NodeSearchResponse(message='No relevant nodes found', nodes=[])
@@ -537,12 +588,93 @@ async def search_memory_facts(
             else []
         )
 
-        relevant_edges = await client.search(
-            group_ids=effective_group_ids,
-            query=query,
-            num_results=max_facts,
-            center_node_uuid=center_node_uuid,
-        )
+        has_reranker = config.reranker.provider.lower() != 'none'
+        if has_reranker:
+            if center_node_uuid is not None:
+                from graphiti_core.search.search_config_recipes import (
+                    EDGE_HYBRID_SEARCH_NODE_DISTANCE,
+                )
+                search_config = EDGE_HYBRID_SEARCH_NODE_DISTANCE
+            else:
+                from graphiti_core.search.search_config_recipes import (
+                    EDGE_HYBRID_SEARCH_CROSS_ENCODER,
+                )
+                search_config = EDGE_HYBRID_SEARCH_CROSS_ENCODER
+            search_config.limit = max_facts
+
+            if effective_group_ids:
+                quota = max(1, max_facts // len(effective_group_ids))
+                per_group_results = await asyncio.gather(
+                    *[
+                        client.search_(
+                            query=query,
+                            config=search_config,
+                            group_ids=[gid],
+                            center_node_uuid=center_node_uuid,
+                            driver=client.driver.clone(database=gid),
+                        )
+                        for gid in effective_group_ids
+                    ]
+                )
+                all_edges: list = []
+                leftovers: list = []
+                for r in per_group_results:
+                    group_edges = r.edges or []
+                    all_edges.extend(group_edges[:quota])
+                    leftovers.extend(group_edges[quota:])
+                remaining = max_facts - len(all_edges)
+                if remaining > 0:
+                    all_edges.extend(leftovers[:remaining])
+                all_edges = all_edges[:max_facts]
+            else:
+                result = await client.search_(
+                    query=query,
+                    config=search_config,
+                    group_ids=None,
+                    center_node_uuid=center_node_uuid,
+                )
+                all_edges = result.edges or []
+        else:
+            if effective_group_ids:
+                quota = max(1, max_facts // len(effective_group_ids))
+                per_group_edges = await asyncio.gather(
+                    *[
+                        client.search(
+                            group_ids=[gid],
+                            query=query,
+                            num_results=quota,
+                            center_node_uuid=center_node_uuid,
+                            driver=client.driver.clone(database=gid),
+                        )
+                        for gid in effective_group_ids
+                    ]
+                )
+                all_edges: list = []
+                leftovers: list = []
+                for group_edges in per_group_edges:
+                    all_edges.extend(list(group_edges)[:quota])
+                    leftovers.extend(list(group_edges)[quota:])
+                remaining = max_facts - len(all_edges)
+                if remaining > 0:
+                    all_edges.extend(leftovers[:remaining])
+                all_edges = all_edges[:max_facts]
+            else:
+                all_edges = await client.search(
+                    group_ids=None,
+                    query=query,
+                    num_results=max_facts,
+                    center_node_uuid=center_node_uuid,
+                )
+
+        # Deduplicate by uuid and apply limit
+        seen: set[str] = set()
+        relevant_edges = []
+        for edge in all_edges:
+            if edge.uuid not in seen:
+                seen.add(edge.uuid)
+                relevant_edges.append(edge)
+                if len(relevant_edges) >= max_facts:
+                    break
 
         if not relevant_edges:
             return FactSearchResponse(message='No relevant facts found', facts=[])
@@ -662,16 +794,35 @@ async def get_episodes(
             else []
         )
 
-        # Get episodes from the driver directly
+        # Get episodes from the driver directly.
+        # For FalkorDB, each group_id is a separate graph, so we must clone the driver
+        # to point at the correct graph before querying. Other drivers ignore the clone.
         from graphiti_core.nodes import EpisodicNode
 
         if effective_group_ids:
-            episodes = await EpisodicNode.get_by_group_ids(
-                client.driver, effective_group_ids, limit=max_episodes
-            )
+            # Fetch per-group results, then allocate slots proportionally so no single
+            # group can crowd out others when the total exceeds max_episodes.
+            quota = max(1, max_episodes // len(effective_group_ids))
+            per_group: list[list] = []
+            for gid in effective_group_ids:
+                target_driver = client.driver.clone(database=gid)
+                group_episodes = await EpisodicNode.get_by_group_ids(
+                    target_driver, [gid], limit=quota
+                )
+                per_group.append(list(group_episodes))
+
+            # Fill up to max_episodes: take quota from each group first,
+            # then round-robin leftovers from groups that returned fewer than quota.
+            episodes: list = []
+            leftovers: list = []
+            for group_result in per_group:
+                episodes.extend(group_result[:quota])
+                leftovers.extend(group_result[quota:])
+            remaining = max_episodes - len(episodes)
+            if remaining > 0:
+                episodes.extend(leftovers[:remaining])
+            episodes = episodes[:max_episodes]
         else:
-            # If no group IDs, we need to use a different approach
-            # For now, return empty list when no group IDs specified
             episodes = []
 
         if not episodes:
@@ -976,6 +1127,13 @@ def main():
     except Exception as e:
         logger.error(f'Error initializing Graphiti MCP server: {str(e)}')
         raise
+    finally:
+        if graphiti_service is not None:
+            try:
+                asyncio.run(graphiti_service.close())
+            except RuntimeError:
+                # Event loop already closed, best-effort cleanup
+                pass
 
 
 if __name__ == '__main__':

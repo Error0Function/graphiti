@@ -169,6 +169,11 @@ class LLMConfig(BaseModel):
         default=None, description='Temperature (optional, defaults to None for reasoning models)'
     )
     max_tokens: int = Field(default=4096, description='Max tokens')
+    thinking_enabled: bool = Field(
+        default=False,
+        description='Enable thinking mode (DeepSeek only). Uses the thinking parameter instead of '
+        'model name detection. Ignored by non-DeepSeek providers.',
+    )
     providers: LLMProvidersConfig = Field(default_factory=LLMProvidersConfig)
 
 
@@ -204,7 +209,6 @@ class RerankerConfig(BaseModel):
 
     provider: str = Field(default='none', description='Reranker provider')
     model: str = Field(default='', description='Model name')
-    dimensions: int | None = Field(default=None, description='Reranker dimensions')
     providers: RerankerProvidersConfig = Field(default_factory=RerankerProvidersConfig)
 
 

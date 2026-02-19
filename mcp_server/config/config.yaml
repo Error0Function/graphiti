@@ -11,9 +11,10 @@ server:
   port: 8000
   
 llm:
-  provider: "openai"  # Options: openai, azure_openai, anthropic, gemini, groq
+  provider: "openai"  # Options: openai, openai_compatible, deepseek, siliconflow, azure_openai, anthropic, gemini, groq
   model: "gpt-4o-mini"
   max_tokens: 4096
+  thinking_enabled: false  # DeepSeek only: enable thinking mode on deepseek-chat via the 'thinking' parameter
   
   providers:
     openai:
@@ -73,7 +74,6 @@ embedder:
 reranker:
   provider: "siliconflow"
   model: "BAAI/bge-reranker-v2-m3"
-  dimensions: ${RERANKER__DIMENSIONS:}
   providers:
     siliconflow:
       api_key: ${RERANKER__API_KEY}

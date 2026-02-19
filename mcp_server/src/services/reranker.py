@@ -10,85 +10,101 @@ from graphiti_core.cross_encoder.client import CrossEncoderClient
 
 logger = logging.getLogger(__name__)
 
+MAX_RETRIES = 2
+REQUEST_TIMEOUT = 30.0
+
+
 class HttpRerankerClient(CrossEncoderClient):
-    def __init__(self, api_key: str, base_url: str, model: str, dimensions: int | None = None):
+    def __init__(self, api_key: str, base_url: str, model: str):
         self.api_key = api_key
         self.base_url = base_url.rstrip('/')
         self.model = model
-        self.dimensions = dimensions
         self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            'Authorization': f'Bearer {self.api_key}',
+            'Content-Type': 'application/json',
         }
+        self._client: httpx.AsyncClient | None = None
+
+    async def _get_client(self) -> httpx.AsyncClient:
+        """Reuse a single httpx.AsyncClient across calls."""
+        if self._client is None or self._client.is_closed:
+            self._client = httpx.AsyncClient(
+                headers=self.headers,
+                timeout=REQUEST_TIMEOUT,
+            )
+        return self._client
+
+    async def close(self) -> None:
+        """Close the underlying httpx client to release connections."""
+        if self._client is not None and not self._client.is_closed:
+            await self._client.aclose()
+            self._client = None
 
     async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
         """
         Rank the given passages based on their relevance to the query.
-        
+
         Args:
-            query (str): The query string.
-            passages (list[str]): A list of passages to rank.
-            
+            query: The query string.
+            passages: A list of passages to rank.
+
         Returns:
-            list[tuple[str, float]]: A list of tuples containing the passage and its score,
-                                     sorted in descending order of relevance.
+            A list of (passage, score) tuples sorted in descending order of relevance.
+
+        Raises:
+            RuntimeError: If the reranking request fails after retries.
         """
         if not passages:
             return []
 
-        # Construct the full URL
-        # Some providers use /v1/rerank, others might use just /rerank if base_url includes /v1
-        # The user provided `https://api.siliconflow.cn/v1` as base_url.
-        # The curl example shows `https://api.siliconflow.cn/v1/rerank`.
-        # So we append /rerank.
-        url = f"{self.base_url}/rerank"
-        
-        payload = {
-            "model": self.model,
-            "query": query,
-            "documents": passages,
-            "top_n": len(passages)
-        }
-        if self.dimensions is not None:
-            payload["dimensions"] = self.dimensions
+        url = f'{self.base_url}/rerank'
 
-        async with httpx.AsyncClient() as client:
+        payload: dict = {
+            'model': self.model,
+            'query': query,
+            'documents': passages,
+            'top_n': len(passages),
+        }
+
+        client = await self._get_client()
+        last_error: Exception | None = None
+
+        for attempt in range(MAX_RETRIES + 1):
             try:
-                response = await client.post(url, json=payload, headers=self.headers, timeout=30.0)
+                response = await client.post(url, json=payload)
                 response.raise_for_status()
                 data = response.json()
-                
-                # SiliconFlow/BGE format:
+
+                # Standard BGE/Jina/SiliconFlow format:
                 # { "results": [ { "index": 0, "relevance_score": 0.9 }, ... ] }
-                # Some APIs return "documents" instead of "results", or simple list of scores.
-                # Assuming standard BGE/Jina format which returns 'results' list with 'index' and 'relevance_score'.
-                
-                results = data.get("results", [])
-                
-                # Map results back to passages
-                ranked_passages = []
+                results = data.get('results', [])
+
+                ranked_passages: list[tuple[str, float]] = []
                 for res in results:
-                    idx = res.get("index")
-                    score = res.get("relevance_score")
-                    
+                    idx = res.get('index')
+                    score = res.get('relevance_score')
+
                     if idx is not None and 0 <= idx < len(passages):
-                        # Ensure score is float
                         try:
                             score = float(score)
                         except (ValueError, TypeError):
                             score = 0.0
-                            
                         ranked_passages.append((passages[idx], score))
-                
-                # If the API didn't return all documents (e.g. top_n limit applied by API despite our request),
-                # we only return what was returned.
-                
-                # Sort by score descending
+
                 ranked_passages.sort(key=lambda x: x[1], reverse=True)
-                
                 return ranked_passages
 
             except Exception as e:
-                logger.error(f"Error during HTTP reranking: {e}")
-                # Fallback: return original passages with 0 score
-                return [(p, 0.0) for p in passages]
+                last_error = e
+                if attempt < MAX_RETRIES:
+                    logger.warning(
+                        f'Reranking attempt {attempt + 1}/{MAX_RETRIES + 1} failed: {e}. '
+                        f'Retrying...'
+                    )
+                    continue
+                break
+
+        logger.error(f'HTTP reranking failed after {MAX_RETRIES + 1} attempts: {last_error}')
+        raise RuntimeError(
+            f'Reranking request failed after {MAX_RETRIES + 1} attempts'
+        ) from last_error

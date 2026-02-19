@@ -147,7 +147,11 @@ class LLMClientFactory:
                     temperature=config.temperature,
                     max_tokens=config.max_tokens,
                 )
-                return DeepSeekClient(config=llm_config, max_tokens=config.max_tokens)
+                return DeepSeekClient(
+                    config=llm_config,
+                    max_tokens=config.max_tokens,
+                    thinking_enabled=config.thinking_enabled,
+                )
 
             case 'siliconflow':
                 if not config.providers.siliconflow:
@@ -538,7 +542,6 @@ class RerankerFactory:
                     base_url=config.providers.siliconflow.api_url,
                     api_key=api_key,
                     model=config.model or 'BAAI/bge-reranker-v2-m3',
-                    dimensions=config.dimensions,
                 )
 
             case 'openai_compatible':
@@ -552,7 +555,6 @@ class RerankerFactory:
                     base_url=config.providers.openai_compatible.api_url,
                     api_key=api_key,
                     model=config.model,
-                    dimensions=config.dimensions,
                 )
 
             case _:
